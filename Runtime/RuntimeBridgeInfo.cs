@@ -6,7 +6,7 @@ namespace UnityRuntimeBridge
     public static class RuntimeBridgeInfo
     {
         /// <summary>桥版本号（runtime.version 命令会返回它）。</summary>
-        public const string Version = "0.1.0";
+        public const string Version = "0.1.1";
 
         /// <summary>所有日志统一加这个前缀，方便在 Console 里过滤。</summary>
         public const string LogPrefix = "[UnityRuntimeBridge]";

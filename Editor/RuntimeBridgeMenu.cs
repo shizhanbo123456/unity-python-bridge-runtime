@@ -1,6 +1,7 @@
 // RuntimeBridgeMenu.cs —— 仅编辑器使用的辅助菜单（Editor 程序集，不会进 Player）。
 
 #if UNITY_EDITOR
+using System.IO;
 using UnityEditor;
 using UnityEngine;
 
@@ -31,7 +32,12 @@ namespace UnityRuntimeBridge.EditorTools
             RuntimeBridgeConfig config = RuntimeBridgeConfig.Current;
             Debug.Log($"{RuntimeBridgeInfo.LogPrefix} 配置: {config.Describe()}");
             Debug.Log($"{RuntimeBridgeInfo.LogPrefix} 数据目录: {RuntimeBridgeConfig.BaseDir}");
+            Debug.Log($"{RuntimeBridgeInfo.LogPrefix} ini 路径: {config.IniPath}");
             Debug.Log($"{RuntimeBridgeInfo.LogPrefix} Python 目录: {RuntimeBridgeConfig.PythonDir}");
+            Debug.Log($"{RuntimeBridgeInfo.LogPrefix} 规范 StreamingAssets 位置: "
+                      + $"{RuntimeBridgeConfig.CanonicalDir}（存在={Directory.Exists(RuntimeBridgeConfig.CanonicalDir)}）");
+            Debug.Log($"{RuntimeBridgeInfo.LogPrefix} 工具自带 StreamingAssets: "
+                      + $"{RuntimeBridgeConfig.BundledDir}（打包时由构建钩子挂进 Player）");
             Debug.Log($"{RuntimeBridgeInfo.LogPrefix} 已注册命令: {RuntimeBridgeDispatcher.Count} 条");
         }
 

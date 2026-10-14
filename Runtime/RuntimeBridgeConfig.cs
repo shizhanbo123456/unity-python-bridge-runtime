@@ -43,6 +43,7 @@ namespace UnityRuntimeBridge
 
         private static RuntimeBridgeConfig _current;
         private static string _baseDir;
+        private static string _bundledDir;
 
         /// <summary>当前生效的配置（首次访问时读取 ini 并缓存）。</summary>
         public static RuntimeBridgeConfig Current
@@ -59,11 +60,17 @@ namespace UnityRuntimeBridge
         {
             _current = null;
             _baseDir = null;
+            _bundledDir = null;
         }
 
         /// <summary>
-        /// 本工具的数据目录。优先 StreamingAssets（随包发布），
-        /// 找不到则回退到 Assets 下同名目录（方便直接连源码一起用）。
+        /// 本工具的数据目录。按顺序取第一个存在的：
+        ///   1. Assets/StreamingAssets/unity-python-bridge-runtime —— 规范位置，唯一会随包发布的位置
+        ///   2. &lt;Assets 下的工具目录&gt;/StreamingAssets/unity-python-bridge-runtime
+        ///      —— 整包拷进 Assets 后的样子。这层 StreamingAssets 不是 Unity 特例目录、不会被打进包，
+        ///         由 Editor 下的 RuntimeBridgeStreamingAssetsHook 在构建时补挂。
+        ///   3. Assets/unity-python-bridge-runtime —— 只放了 C# 代码时（用默认配置）
+        /// 都不存在时返回第 1 个候选（不存在的路径，配置读取会全部走默认值）。
         /// </summary>
         public static string BaseDir
         {
@@ -72,21 +79,124 @@ namespace UnityRuntimeBridge
                 if (_baseDir != null) return _baseDir;
 
                 var candidates = new List<string>();
-                TryAddCandidate(candidates, () => Application.streamingAssetsPath, RuntimeBridgeInfo.FolderName);
+                string canonical = CanonicalDir;
+                if (!string.IsNullOrEmpty(canonical)) candidates.Add(canonical);
+                if (!string.IsNullOrEmpty(BundledDir)) candidates.Add(BundledDir);
                 TryAddCandidate(candidates, () => Application.dataPath, RuntimeBridgeInfo.FolderName);
-                TryAddCandidate(candidates, () => Application.dataPath, "StreamingAssets", RuntimeBridgeInfo.FolderName);
 
                 foreach (string candidate in candidates)
                 {
-                    if (Directory.Exists(candidate))
+                    if (string.IsNullOrEmpty(candidate)) continue;
+                    try
                     {
-                        _baseDir = candidate;
-                        return _baseDir;
+                        if (Directory.Exists(candidate))
+                        {
+                            _baseDir = candidate;
+                            return _baseDir;
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // 路径非法（字符/权限问题）时换下一个候选
                     }
                 }
 
-                _baseDir = candidates.Count > 0 ? candidates[0] : RuntimeBridgeInfo.FolderName;
+                _baseDir = canonical ?? RuntimeBridgeInfo.FolderName;
                 return _baseDir;
+            }
+        }
+
+        /// <summary>规范位置：Assets/StreamingAssets/unity-python-bridge-runtime。</summary>
+        public static string CanonicalDir
+        {
+            get
+            {
+                try
+                {
+                    return Path.Combine(Application.streamingAssetsPath, RuntimeBridgeInfo.FolderName);
+                }
+                catch (Exception)
+                {
+                    return null;
+                }
+            }
+        }
+
+        /// <summary>工具自带的 StreamingAssets 内容（整包拷进 Assets 后的位置）。找不到返回 null。</summary>
+        public static string BundledDir => _bundledDir ?? (_bundledDir = ResolveBundledDir());
+
+        private static string ResolveBundledDir()
+        {
+            try
+            {
+                string dataPath = Application.dataPath;
+                if (string.IsNullOrEmpty(dataPath)) return null;
+
+                string direct = Path.Combine(dataPath, RuntimeBridgeInfo.FolderName,
+                    "StreamingAssets", RuntimeBridgeInfo.FolderName);
+                if (Directory.Exists(direct)) return direct;
+
+                // 工具目录被改名时：扫一遍 Assets 的一级子目录（数量有限，开销可忽略）
+                foreach (string child in Directory.GetDirectories(dataPath))
+                {
+                    string candidate = Path.Combine(child, "StreamingAssets", RuntimeBridgeInfo.FolderName);
+                    if (Directory.Exists(candidate)) return candidate;
+                }
+            }
+            catch (Exception)
+            {
+                // 平台限制目录枚举时忽略
+            }
+            return null;
+        }
+
+        /// <summary>配置来源。</summary>
+        public enum SourceKind
+        {
+            /// <summary>没找到 ini，全部走默认值。</summary>
+            Missing,
+
+            /// <summary>来自 Assets/StreamingAssets 下，会随包发布。</summary>
+            StreamingAssets,
+
+            /// <summary>来自工具目录内，不进包（构建时由 Editor 钩子补挂）。</summary>
+            ToolFolder
+        }
+
+        /// <summary>本次配置的来源。</summary>
+        public SourceKind Source { get; private set; } = SourceKind.Missing;
+
+        /// <summary>来源的中文说明，便于排障。</summary>
+        public string SourceText
+        {
+            get
+            {
+                switch (Source)
+                {
+                    case SourceKind.StreamingAssets:
+                        return "StreamingAssets 下（会随包发布）";
+                    case SourceKind.ToolFolder:
+                        return "工具目录内（不进包，构建时由 Editor 钩子挂进 Player）";
+                    default:
+                        return "未找到 ini，使用默认值";
+                }
+            }
+        }
+
+        /// <summary>判断某个目录是否为规范位置（用规范化路径比较，避免斜杠/大小写差异）。</summary>
+        private static bool IsCanonical(string dir)
+        {
+            if (string.IsNullOrEmpty(dir)) return false;
+            try
+            {
+                return string.Equals(
+                    Path.GetFullPath(dir).TrimEnd('/', '\\'),
+                    Path.GetFullPath(CanonicalDir).TrimEnd('/', '\\'),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception)
+            {
+                return false;
             }
         }
 
@@ -122,7 +232,9 @@ namespace UnityRuntimeBridge
 
             if (!File.Exists(path))
             {
-                Debug.Log($"{RuntimeBridgeInfo.LogPrefix} 未找到 {path}，使用默认配置（端口 {config.Port}）");
+                config.Source = SourceKind.Missing;
+                Debug.Log($"{RuntimeBridgeInfo.LogPrefix} 未找到 {path}，使用默认配置（端口 {config.Port}）；"
+                          + "Python 侧请用 --port 指定同一个端口");
                 return config;
             }
 
@@ -139,9 +251,11 @@ namespace UnityRuntimeBridge
                     config.FlushBudgetMs = Clamp(ReadFloat(server, "flush_budget_ms", config.FlushBudgetMs), 0f, 1000f);
                     config.MaxQueued = Math.Max(1, ReadInt(server, "max_queued", config.MaxQueued));
                 }
+                config.Source = IsCanonical(BaseDir) ? SourceKind.StreamingAssets : SourceKind.ToolFolder;
             }
             catch (Exception e)
             {
+                config.Source = SourceKind.Missing;
                 Debug.LogWarning($"{RuntimeBridgeInfo.LogPrefix} 解析 {path} 失败，使用默认配置: {e.Message}");
             }
 
@@ -214,7 +328,8 @@ namespace UnityRuntimeBridge
         public string Describe()
         {
             return $"端口={Port} 监听={BindAddress} 自动启动={AutoStart} 令牌={(string.IsNullOrEmpty(Token) ? "无" : "有")} "
-                   + $"帧预算={FlushBudgetMs}ms 队列上限={MaxQueued} 记录命令={LogCommands} ini={IniPath}";
+                   + $"帧预算={FlushBudgetMs}ms 队列上限={MaxQueued} 记录命令={LogCommands} "
+                   + $"配置来源={SourceText}";
         }
     }
 

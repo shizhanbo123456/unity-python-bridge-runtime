@@ -54,6 +54,9 @@ namespace UnityRuntimeBridge
                 logCommands = config.LogCommands,
                 baseDir = RuntimeBridgeConfig.BaseDir,
                 iniPath = config.IniPath,
+                iniSource = config.SourceText,
+                canonicalDir = RuntimeBridgeConfig.CanonicalDir,
+                bundledDir = RuntimeBridgeConfig.BundledDir,
                 pythonDir = RuntimeBridgeConfig.PythonDir
             };
         }

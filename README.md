@@ -45,75 +45,99 @@
 ## 目录结构
 
 ```
-unity-python-bridge-runtime/
-├── Assets/
-│   ├── unity-python-bridge-runtime/          ← C# 侧：拷到工程 Assets/ 下
-│   │   ├── Runtime/                          # 全部运行时安全，可在 Player 中运行
-│   │   │   ├── RtJson.cs                     # 自实现的 JSON 解析/序列化（纯 C#，无 Unity 依赖）
-│   │   │   ├── RuntimeBridgeJson.cs          # Unity 值 → JSON 的转换（Vector3/Color/对象引用…）
-│   │   │   ├── RuntimeCommandAttribute.cs    # [RuntimeCommand] 特性
-│   │   │   ├── RuntimeBridgeContext.cs       # 上下文 / 参数封装 / 处理器委托
-│   │   │   ├── RuntimeBridgeDispatcher.cs    # 反射扫描 + 命令分发
-│   │   │   ├── RuntimeBridgeRunner.cs        # 主线程队列（带帧预算）
-│   │   │   ├── RuntimeBridgePump.cs          # 主线程心跳（常驻隐藏物体）
-│   │   │   ├── RuntimeBridgeServer.cs        # TCP 服务器 + 自动开服
-│   │   │   ├── RuntimeBridgeConfig.cs        # 读 StreamingAssets 下的 ini
-│   │   │   ├── RuntimeBridgeInfo.cs          # 常量（版本/端口/目录名）
-│   │   │   └── RuntimeBridgeSystemCommands.cs# 内置 runtime.* 命令
-│   │   ├── Editor/RuntimeBridgeMenu.cs       # 仅编辑器菜单（不进 Player，可选）
-│   │   └── Samples/RuntimeBridgeSampleCommands.cs  # 示例命令，跑通后可删
-│   └── StreamingAssets/
-│       └── unity-python-bridge-runtime/      ← 随包发布：Python + 配置
-│           ├── runtime_bridge.ini            # 两侧共用的配置
-│           └── python/
-│               ├── unity_rt_bridge/          # 客户端包（config/client/cli）
-│               └── scripts/
-│                   ├── mock_runtime_server.py # 没 Unity 时的模拟服务器
-│                   └── selftest.py            # 端到端自测
-├── link.xml.example                          # IL2CPP 代码剥离的示例配置
+unity-python-bridge-runtime/                 ← 整包拷到工程的 Assets/ 下
+├── Runtime/                                 # 全部运行时安全，可在 Player 中运行
+│   ├── RtJson.cs                            # 自实现的 JSON 解析/序列化（纯 C#，无 Unity 依赖）
+│   ├── RuntimeBridgeJson.cs                 # Unity 值 → JSON 的转换（Vector3/Color/对象引用…）
+│   ├── RuntimeCommandAttribute.cs           # [RuntimeCommand] 特性
+│   ├── RuntimeBridgeContext.cs              # 上下文 / 参数封装 / 处理器委托
+│   ├── RuntimeBridgeDispatcher.cs           # 反射扫描 + 命令分发
+│   ├── RuntimeBridgeRunner.cs               # 主线程队列（带帧预算）
+│   ├── RuntimeBridgePump.cs                 # 主线程心跳（常驻隐藏物体）
+│   ├── RuntimeBridgeServer.cs               # TCP 服务器 + 自动开服
+│   ├── RuntimeBridgeConfig.cs               # 读 StreamingAssets 下的 ini
+│   ├── RuntimeBridgeInfo.cs                 # 常量（版本/端口/目录名）
+│   └── RuntimeBridgeSystemCommands.cs       # 内置 runtime.* 命令
+├── Editor/
+│   ├── RuntimeBridgeMenu.cs                 # 编辑器菜单（打印配置/复制 Python 命令）
+│   └── RuntimeBridgeStreamingAssetsHook.cs  # ★ 构建时把下面的 StreamingAssets 挂进 Player
+├── Samples/RuntimeBridgeSampleCommands.cs   # 示例命令，跑通后可删
+├── StreamingAssets/
+│   └── unity-python-bridge-runtime/         # Python + 配置，随包发布
+│       ├── runtime_bridge.ini               # 两侧共用的配置
+│       └── python/
+│           ├── unity_rt_bridge/             # 客户端包（config/client/cli）
+│           └── scripts/
+│               ├── mock_runtime_server.py   # 没 Unity 时的模拟服务器
+│               └── selftest.py              # 端到端自测
+├── link.xml.example                         # IL2CPP 代码剥离的示例配置
 └── README.md
 ```
 
-放在 `StreamingAssets` 下的原因：打包后它会原样出现在 `<游戏>_Data/StreamingAssets/` 里，
-Python 客户端和配置跟着游戏走，现场不用再单独拷一份、也不会出现"版本对不上"。
+### ⚠️ 关于这里的 StreamingAssets：它不在"规范位置"
+
+Unity 只认**一个** StreamingAssets，且必须直接位于 `Assets/` 根部
+（[官方文档](https://docs.unity3d.com/cn/2021.3/Manual/SpecialFolders.html)：「只能有一个 StreamingAssets
+文件夹，且必须将其放在项目的根目录，直接位于 Assets 文件夹中」）。
+
+本工具按 unity-python-bridge 的约定整包拷进 `Assets/`，所以它内部的 StreamingAssets 实际位于
+`Assets/unity-python-bridge-runtime/StreamingAssets/...`——**这个位置 Unity 不会复制进 Player**。
+编辑器里一切正常，但打包后 Python 与 ini 会直接消失。
+
+所以本库带了一个 `Editor/RuntimeBridgeStreamingAssetsHook.cs`：用官方的
+`BuildPlayerProcessor` + `AddAdditionalPathToStreamingAssets`，在**构建时自动**把该目录挂到
+Player 的 `StreamingAssets/unity-python-bridge-runtime` 下。你不需要手动拷两份，构建日志里会看到：
+
+```
+[UnityRuntimeBridge] 构建：已把 …/Assets/unity-python-bridge-runtime/StreamingAssets/unity-python-bridge-runtime
+                                挂进 Player 的 StreamingAssets/unity-python-bridge-runtime
+```
+
+如果你更习惯手动管理，也可以在工程里建 `Assets/StreamingAssets/unity-python-bridge-runtime/`
+并把内容拷进去（放规范位置，钩子会自动跳过不重复添加）。
 
 ---
 
-## 安装（三步）
+## 安装（两步）
 
-1. **拷代码**：把本仓库 `Assets/` 下的两个目录合并进你的 Unity 工程：
-   - `Assets/unity-python-bridge-runtime/` → `<你的工程>/Assets/unity-python-bridge-runtime/`
-   - `Assets/StreamingAssets/unity-python-bridge-runtime/` → `<你的工程>/Assets/StreamingAssets/unity-python-bridge-runtime/`
+1. **拷代码**：把本仓库整个 `unity-python-bridge-runtime/` 目录拷到 `<你的工程>/Assets/` 下，
+   得到 `Assets/unity-python-bridge-runtime/`。**就这一步**，StreamingAssets 由构建钩子处理。
 
-   > ⚠️ 两个都要拷。只拷前一个也能跑（用默认端口），但 Python 侧就得自己另找一份了。
-   > 目录名不要改——C# 按这个名字找 ini 和 Python 目录。
+   > 目录名建议别改（`RuntimeBridgeConfig` 按名字找目录，改了也能工作但会多扫描一次）。
+   > 如果你的工程已有 `Assets/StreamingAssets/`，也可以按老办法把
+   > `StreamingAssets/unity-python-bridge-runtime/` 手动拷到那里——两种方式都支持。
 
 2. **让 Unity 生成 `.meta`**：导入后 Unity 会自动为脚本生成 `.meta`（GUID）。建议把它们一并提交，
    这样换机器/换工程时 GUID 稳定。
 
-3. **验证**：进 Play 模式，Console 应出现：
-   ```
-   [UnityRuntimeBridge] 已注册 N 条命令（扫描 M 个程序集）
-   [UnityRuntimeBridge] v0.1.0 服务器已启动，监听 127.0.0.1:21928；端口=21928 …
-   ```
+用 Python 连上去（Python 3.6+，无需装包）。进 Play 模式，Console 应出现：
 
-用 Python 连上去（Python 3.6+，无需装包）：
+```
+[UnityRuntimeBridge] 已注册 N 条命令（扫描 M 个程序集）
+[UnityRuntimeBridge] v0.1.0 服务器已启动，监听 127.0.0.1:21928；… 配置来源=工具目录内（不进包…）
+```
+
+然后：
 
 ```bash
-cd <你的工程>/Assets/StreamingAssets/unity-python-bridge-runtime/python
+cd <你的工程>/Assets/unity-python-bridge-runtime/StreamingAssets/unity-python-bridge-runtime/python
 python -m unity_rt_bridge ping
 python -m unity_rt_bridge list
 python -m unity_rt_bridge call sample.scene_info
 ```
 
-打包后的用法完全一样——把命令行的 `cd` 指向 `<游戏>_Data/StreamingAssets/unity-python-bridge-runtime/python` 即可。
+不用记路径：编辑器菜单 **Tools → Unity Runtime Bridge → 复制 Python 客户端命令** 会把当前
+工程对应的命令放进剪贴板。
+
+打包后的用法完全一样——`cd` 指向 `<游戏>_Data/StreamingAssets/unity-python-bridge-runtime/python`
+（也就是钩子挂进去的那份）。
 
 **没有 Unity 也想先试**：用模拟服务器（在 `python/` 目录下）
 
 ```bash
 python scripts/mock_runtime_server.py        # 终端 A
 python -m unity_rt_bridge list               # 终端 B
-python scripts/selftest.py                   # 或直接跑自测（46 项，不需要 Unity）
+python scripts/selftest.py                   # 或直接跑自测（47 项，不需要 Unity）
 ```
 
 ---
@@ -272,7 +296,12 @@ python -m unity_rt_bridge call p --compact > out.json                 # 单行�
 
 ## 配置：`runtime_bridge.ini`
 
-改完**下次运行生效**，不需要重新打包（它就在 StreamingAssets 里；打包后的游戏改这个文件也有效）。
+**改完下次运行生效**，不需要改代码。注意工程里同时存在两份，各管一段：
+
+| 位置 | 谁在用它 | 改了之后 |
+|---|---|---|
+| `Assets/unity-python-bridge-runtime/StreamingAssets/unity-python-bridge-runtime/runtime_bridge.ini` | 编辑器 Play 模式；**打包时由钩子复制进包** | 编辑器立刻生效；打包版需要重新构建 |
+| `<游戏>_Data/StreamingAssets/unity-python-bridge-runtime/runtime_bridge.ini` | 打包后的游戏自己读的那份 | 改完下次启动游戏即生效，不用重新构建 |
 
 | 节 | 键 | 默认 | 说明 |
 |---|---|---|---|
@@ -286,6 +315,7 @@ python -m unity_rt_bridge call p --compact > out.json                 # 单行�
 | `[python]` | `host/port/token/timeout` | 空 | 只给 Python 侧用；留空则回退到 `[server]` 或内置默认值 |
 
 文件缺失或某项写错时，**该项回退默认值，不会影响游戏启动**。
+用 `python -m unity_rt_bridge config` 可以看游戏侧实际生效的值与来源。
 
 ---
 
@@ -305,7 +335,21 @@ python -m unity_rt_bridge call p --compact > out.json                 # 单行�
 ### 2. 确认 Python 真的进包了
 
 打包后检查 `<游戏>_Data/StreamingAssets/unity-python-bridge-runtime/` 是否存在，
-`python/unity_rt_bridge/` 与 `runtime_bridge.ini` 都在。缺了就是第 1 步的两个目录没拷全。
+`python/unity_rt_bridge/` 与 `runtime_bridge.ini` 都在。
+
+没有的话先看构建日志里有没有 `构建：已把 … 挂进 Player 的 StreamingAssets/…`。
+如果日志里是那句 Warning（既没有规范位置的 StreamingAssets、也没找到工具自带的），
+说明构建钩子所在的 Editor 目录没被导入，或工具目录结构被改过。
+
+进游戏后用 Python 查一下配置来源，最直接：
+
+```bash
+python -m unity_rt_bridge config        # 看 iniSource 与 iniPath
+```
+
+`iniSource` 应为「StreamingAssets 下（会随包发布）」；若是「工具目录内……」说明读的是
+工程里的那份（编辑器正常，但要确认它是靠钩子挂进包的）；若是「未找到 ini，使用默认值」
+就是没进包，此时游戏仍在 21928 端口上跑、无令牌。
 
 ### 3. 平台限制
 
@@ -368,9 +412,11 @@ echo '{"id":1,"cmd":"runtime.ping","args":{}}' | nc 127.0.0.1 21928
 | Console 里没有"服务器已启动" | 看有没有"监听失败: 端口可能被占用"——换端口，或确认 21927 那边不是同一个端口 |
 | Play 模式下命令不执行、队列一直涨 | 隐藏的 `[UnityRuntimeBridge]` 常驻物体被销毁了（别把它算进场景清理逻辑） |
 | 打包后 `runtime.list_commands` 只有 6 条 | 你的命令类被 IL2CPP 剥离了，见"打包注意事项 1" |
+| 打包后连不上、`config` 显示"未找到 ini" | 工具的 StreamingAssets 没进包，看构建日志里的钩子记录，见"打包注意事项 2" |
 | 命令名重复的 Warning | 两条命令用了同一个名字，先注册的生效，改名字 |
 | 响应超时 | 命令在主线程卡住了（死循环/加载资源），或帧预算把它推到了后续帧 |
-| 改了 ini 端口不生效 | 编辑器和打包版各有一份 ini，确认改的是当前在跑的那一份 |
+| 改了 ini 端口不生效 | 工程里和打包产物里各有一份，确认改的是当前在跑的那一份（`runtime.config` 能看到 iniPath） |
+| 构建报 "已存在同目标路径" | 你既把内容放进了 `Assets/StreamingAssets/`，又留着工具目录内的那份；钩子会自动跳过后者，若仍报错请检查是否有别的构建脚本也在加同一路径 |
 
 编辑器里还有个辅助菜单：**Tools → Unity Runtime Bridge**，可以打印配置与路径、
 列出已注册命令、把 Python 命令复制到剪贴板。
@@ -382,12 +428,22 @@ echo '{"id":1,"cmd":"runtime.ping","args":{}}' | nc 127.0.0.1 21928
 - ✅ C# 侧（Runtime + Editor + Samples）用 **Unity 2022.3.62f2 的真实引擎 DLL 编译通过，0 warning 0 error**。
 - ✅ Runtime 目录**不引用 UnityEditor** 也能独立编译通过（另建了一个只引 `UnityEngine.CoreModule`
   的工程验证），这是"打包后可用"的前提。
+- ✅ 构建钩子用到的 `BuildPlayerProcessor` / `BuildPlayerContext.AddAdditionalPathToStreamingAssets`
+  是在 Unity 2022.3 的 `UnityEditor.CoreModule.dll` 上**编译验证过签名**的，不是照文档猜的。
 - ✅ 自实现的 JSON 层用 66 项测试覆盖（转义、代理对、整数/浮点精度、循环引用、深度上限、往返一致…）。
-- ✅ Python 侧端到端自测 **46 项通过**，**Python 3.6.3 与 3.13.14 均通过**（含 CLI 子进程、令牌校验、
-  连接失败提示、参数类型自动识别、以及"拷到 StreamingAssets 布局后自动找到 ini"的部署验证）。
-- ⚠️ **尚未做真机 Unity ↔ Python 联调**：需要在一个 Unity 工程里进 Play 模式跑一次。
+- ✅ Python 侧端到端自测 **47 项通过**，**Python 3.6.3 与 3.13.14 均通过**（含 CLI 子进程、令牌校验、
+  连接失败提示、参数类型自动识别、以及"换目录部署后自动找到 ini"的验证）。
+- ⚠️ **尚未做真机 Unity ↔ Python 联调**：需要在一个 Unity 工程里进 Play 模式跑一次；
+  构建钩子的实际打包效果也需要真实构建一次才能确认（当前只保证 API 用法正确、逻辑有守卫）。
   测试用的是协议等价的模拟服务器（`scripts/mock_runtime_server.py`）。
 
 ## 版本
 
-`0.1.0`（`runtime.version` 命令可查）。改版本号只需改 `RuntimeBridgeInfo.cs`。
+`0.1.1`（`runtime.version` 命令可查）。改版本号只需改 `RuntimeBridgeInfo.cs`。
+
+变更记录：
+
+- `0.1.1` —— 适配"仓库整包拷进 Assets"的目录结构：新增 Editor 构建钩子
+  `RuntimeBridgeStreamingAssetsHook`（解决嵌套 StreamingAssets 不进包的问题）；`runtime.config`
+  新增 `iniSource` / `canonicalDir` / `bundledDir` 便于确认配置来源。
+- `0.1.0` —— 首个版本。

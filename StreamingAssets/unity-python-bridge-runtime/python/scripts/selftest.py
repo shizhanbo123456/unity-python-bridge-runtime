@@ -79,8 +79,17 @@ def check_deployed_layout():
     在真实部署布局下是成立的。这是整套安装方式里最容易出错的一环。
     """
     import unity_rt_bridge
+    from unity_rt_bridge import find_ini
 
     base_dir = os.path.dirname(PYTHON_DIR)
+
+    # 0) 先确认"仓库自身 / 打包产物"这两种形态下，ini 都能被自动找到。
+    #    两者布局一致（<base>/runtime_bridge.ini 与 <base>/python/...），靠的都是相对路径。
+    source_ini = find_ini()
+    check(source_ini is not None and os.path.dirname(os.path.abspath(str(source_ini))) == os.path.abspath(base_dir),
+          "部署布局：源码目录下自动定位到上层 ini",
+          "find_ini()=%s base=%s" % (source_ini, base_dir))
+
     probe_port = free_port()
     server, _thread, _bound = mock_runtime_server.start_in_thread(port=probe_port)
 
